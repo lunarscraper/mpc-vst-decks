@@ -1,0 +1,344 @@
+{
+ "_comment": "Not a real Schwung module -- chain_params lists the VST parameters of decks_vst.cpp so mpc-vst-plugins' tools/gen_vst.py can generate params.h + the skin. Keys must match decks_vst.cpp (KEYS[]). New parameters of later phases are appended (parameter numbers of earlier phases stay). Parameters with display=string are text the plugin writes (readouts, list rows).",
+ "chain_params": [
+  {
+   "key": "vol_a",
+   "name": "Volume A",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "vol_b",
+   "name": "Volume B",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "xfade",
+   "name": "Crossfader",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "master",
+   "name": "Master",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "play_a",
+   "name": "Play A",
+   "access": "write"
+  },
+  {
+   "key": "cue_a",
+   "name": "Cue A",
+   "access": "write"
+  },
+  {
+   "key": "sync_a",
+   "name": "Sync A",
+   "options": [
+    "OFF",
+    "ON"
+   ]
+  },
+  {
+   "key": "pitch_a",
+   "name": "Pitch A",
+   "min": -8,
+   "max": 8
+  },
+  {
+   "key": "nudge_a",
+   "name": "Nudge A",
+   "min": -50,
+   "max": 50
+  },
+  {
+   "key": "play_b",
+   "name": "Play B",
+   "access": "write"
+  },
+  {
+   "key": "cue_b",
+   "name": "Cue B",
+   "access": "write"
+  },
+  {
+   "key": "sync_b",
+   "name": "Sync B",
+   "options": [
+    "OFF",
+    "ON"
+   ]
+  },
+  {
+   "key": "pitch_b",
+   "name": "Pitch B",
+   "min": -8,
+   "max": 8
+  },
+  {
+   "key": "nudge_b",
+   "name": "Nudge B",
+   "min": -50,
+   "max": 50
+  },
+  {
+   "key": "quant",
+   "name": "Quantize",
+   "options": [
+    "OFF",
+    "BEAT",
+    "BAR"
+   ]
+  },
+  {
+   "key": "track",
+   "name": "Track",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "load_a",
+   "name": "Load A",
+   "access": "write"
+  },
+  {
+   "key": "load_b",
+   "name": "Load B",
+   "access": "write"
+  },
+  {
+   "key": "rescan",
+   "name": "Rescan",
+   "access": "write"
+  },
+  {
+   "key": "row_1",
+   "name": "Row 1",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_2",
+   "name": "Row 2",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_3",
+   "name": "Row 3",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_4",
+   "name": "Row 4",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_5",
+   "name": "Row 5",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_6",
+   "name": "Row 6",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_7",
+   "name": "Row 7",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "row_8",
+   "name": "Row 8",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "drive",
+   "name": "Drive",
+   "min": 1,
+   "max": 8
+  },
+  {
+   "key": "drive_prev",
+   "name": "Drive Prev",
+   "access": "write"
+  },
+  {
+   "key": "drive_next",
+   "name": "Drive Next",
+   "access": "write"
+  },
+  {
+   "key": "folder",
+   "name": "Folder",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "fold_1",
+   "name": "Folder Row 1",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "fold_2",
+   "name": "Folder Row 2",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "fold_3",
+   "name": "Folder Row 3",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "fold_4",
+   "name": "Folder Row 4",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "fold_5",
+   "name": "Folder Row 5",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "fold_6",
+   "name": "Folder Row 6",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "up",
+   "name": "Up",
+   "access": "write"
+  },
+  {
+   "key": "use",
+   "name": "Use Folder",
+   "access": "write"
+  },
+  {
+   "key": "remove",
+   "name": "Remove Folder",
+   "access": "write"
+  },
+  {
+   "key": "title_a",
+   "name": "Title A",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "info_a",
+   "name": "Info A",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "bar_a",
+   "name": "Position A",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "title_b",
+   "name": "Title B",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "info_b",
+   "name": "Info B",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "bar_b",
+   "name": "Position B",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "lib_info",
+   "name": "Library",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "status",
+   "name": "Status",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "path",
+   "name": "Path",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "sources",
+   "name": "Sources",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "clock",
+   "name": "Clock",
+   "options": [
+    "DECKS",
+    "FORCE"
+   ]
+  },
+  {
+   "key": "glide",
+   "name": "Glide",
+   "options": [
+    "OFF",
+    "1 BAR",
+    "2 BARS",
+    "4 BARS",
+    "8 BARS",
+    "16 BARS"
+   ]
+  }
+ ]
+}

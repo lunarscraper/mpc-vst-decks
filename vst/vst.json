@@ -1,0 +1,10 @@
+{
+  "name": "Decks",
+  "vendor": "lunarscraper",
+  "uid": "Dcks",
+  "version": 1000,
+  "so": "decks.so",
+  "module": "module.json",
+  "layout": "layout.conf",
+  "_comment": "Instrument: 2-deck DJ player locked to the Force clock (decks_engine.h), tracks from freely chosen folders on any mounted drive (decks_library.h). vst.json/module.json only feed mpc-vst-plugins' tools/gen_vst.py for params.h + the skin. The plugin is decks_vst.cpp, built by this port's own build.sh."
+}
