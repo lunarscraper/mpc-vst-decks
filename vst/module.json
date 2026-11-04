@@ -339,6 +339,46 @@
     "8 BARS",
     "16 BARS"
    ]
+  },
+  {
+   "key": "open",
+   "name": "Open Folder",
+   "access": "write"
+  },
+  {
+   "key": "help_1",
+   "name": "Help 1",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "help_2",
+   "name": "Help 2",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "help_3",
+   "name": "Help 3",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "help_4",
+   "name": "Help 4",
+   "min": 0,
+   "max": 1,
+   "display": "string"
+  },
+  {
+   "key": "help_5",
+   "name": "Help 5",
+   "min": 0,
+   "max": 1,
+   "display": "string"
   }
  ]
 }

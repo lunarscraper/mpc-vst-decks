@@ -15,6 +15,13 @@ Schlanker DJ-Player mit zwei Decks und Crossfader in **einem** Plugin, angelehnt
 | Bedienung | Force-Pads, Q-Links (nur Regler, keine Tasten) und große Touch-Flächen |
 | Samplerate | Force 44,1 kHz; Tracks mit anderer Rate (z. B. 48 kHz) werden über die Abspielrate ausgeglichen (gleiches Ergebnis wie Umrechnen beim Laden, spart Zeit und RAM) |
 
+## Update 0.3.0 – Bedienung am Gerät
+
+Nach dem Test auf der Force:
+- **Ordner per Regler:** Der FOLDER-Regler wählt jetzt einen Ordner aus der ganzen Liste (markierte Zeile, die Liste blättert seitenweise mit), **OPEN** öffnet ihn. Antippen einer Zeile öffnet weiterhin direkt. Gleiches Prinzip wie TRACK + LOAD A/B im Browser.
+- **Regler bewegen sich:** Alle Bedienelemente melden sich jetzt beim Host als automatisierbar – vorher nur die Mixer-Einstellungen, vermutlich der Grund, warum FOLDER (und TRACK) auf den Q-Links nicht reagierten. Die Regler-Anzeige zeigt `3 / 63` und wird nach jedem Einlesen aktualisiert (vorher blieb `-` stehen).
+- **SETUP lesbar:** Keine kleine eingebrannte Pixelschrift mehr. CLOCK, GLIDE und QUANTIZE sind Auswahlfelder, Erklärung und Pad-Belegung stehen in Textzeilen in der Gerätschrift.
+
 ## Update 0.2.0 – eigene Clock
 
 Erfahrung aus dem ersten Test auf der Force: Mit der Force-Clock lief Decks nur bei laufendem Transport, das Tempo der Force galt für alle Tracks, und die Force stoppt nach 999 Takten. Deshalb gibt es jetzt eine eigene Clock im Plugin.
@@ -50,7 +57,7 @@ Umgesetzt in drei Teilen plus Hülle:
 |---|---|---|
 | DECKS | links Deck A, rechts Deck B: Titel, Tempo/Zeit, Positionsbalken mit Takt.Schlag und Lock-Abweichung; PLAY, CUE, SYNC je Deck; MASTER und X-FADE in der Mitte | 1 PITCH A · 2 NUDGE A · 3 VOL A · 4 X-FADE · 5 VOL B · 6 NUDGE B · 7 PITCH B · 8 MASTER (gespiegelt wie ein DJ-Mixer) |
 | BROWSER | Track-Liste mit 8 großen Zeilen (Tempo, Name, `[A]`/`[B]` für geladene Tracks), Antippen wählt aus; LOAD A, LOAD B, RESCAN; Statuszeile | TRACK (blättert durch die ganze Liste) |
-| SOURCE | Laufwerk (Pfeile), aktueller Ordner, 6 Unterordner (Antippen öffnet), UP, USE FOLDER, REMOVE; Quellen-Übersicht, Status | DRIVE, FOLDER |
+| SOURCE | Laufwerk (Pfeile), aktueller Ordner, 6 Unterordner (Antippen öffnet), OPEN (gewählter Ordner), UP, USE FOLDER, REMOVE; Quellen-Übersicht, Status | DRIVE, FOLDER (wählt den Ordner) |
 | SETUP | CLOCK (DECKS/FORCE), GLIDE, QUANTIZE (OFF/BEAT/BAR), MASTER, Pad-Belegung | CLOCK, GLIDE, QUANTIZE, MASTER |
 
 Außerhalb des Seiten-Folgemodus liegen die DECKS-Regler auf den Q-Links.
@@ -152,4 +159,4 @@ GitHub → Actions → „VST release (draft)“ → Run workflow (Version `0.1.
 
 - [Mixxx](https://github.com/mixxxdj/mixxx) – Vorbild für Bedienkonzept, Sync und Quantisierung
 - [mackron/dr_libs](https://github.com/mackron/dr_libs) – Dekoder
-- `open-mpc/mpc-vst-plugins` – Build-Werkzeuge, Skin-Generator, Workflow
+- `sd88me/mpc-vst-plugins` – Build-Werkzeuge, Skin-Generator, Workflow

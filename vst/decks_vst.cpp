@@ -81,6 +81,8 @@ enum {
     TITLE_A, INFO_A, BAR_A, TITLE_B, INFO_B, BAR_B, LIB_INFO, STATUS, PATH, SOURCES,
     /* update 0.2, appended */
     CLOCK, GLIDE,
+    /* update 0.3, appended */
+    OPEN, HELP_1, HELP_2, HELP_3, HELP_4, HELP_5,
     NKEYS
 };
 static const char *const KEYS[NKEYS] = {
@@ -94,16 +96,17 @@ static const char *const KEYS[NKEYS] = {
     "up", "use", "remove",
     "title_a", "info_a", "bar_a", "title_b", "info_b", "bar_b", "lib_info", "status", "path", "sources",
     "clock", "glide",
+    "open", "help_1", "help_2", "help_3", "help_4", "help_5",
 };
 static int IDX[NKEYS];
 static int KEY_OF[NPARAMS];   /* PARAMS[] position -> key enum, -1 = not ours */
 static bool is_trigger(int k) {
     return k == PLAY_A || k == CUE_A || k == PLAY_B || k == CUE_B || k == LOAD_A || k == LOAD_B || k == RESCAN ||
-           k == DRIVE_PREV || k == DRIVE_NEXT || k == UP || k == USE || k == REMOVE;
+           k == DRIVE_PREV || k == DRIVE_NEXT || k == UP || k == USE || k == REMOVE || k == OPEN;
 }
 static bool is_row(int k) { return k >= ROW_1 && k <= ROW_8; }
 static bool is_fold(int k) { return k >= FOLD_1 && k <= FOLD_6; }
-static bool is_text(int k) { return k >= TITLE_A && k <= SOURCES; }
+static bool is_text(int k) { return (k >= TITLE_A && k <= SOURCES) || (k >= HELP_1 && k <= HELP_5); }
 /* what the project chunk keeps: the mixer and the deck settings */
 static bool is_setting(int k) {
     return k == VOL_A || k == VOL_B || k == XFADE || k == MASTER || k == SYNC_A || k == PITCH_A || k == NUDGE_A ||
@@ -133,8 +136,8 @@ struct Plugin {
     MidiEv ev[NEV];
     int nev = 0;
     std::atomic<int> row_rep[decks::ROWS];   /* the on-state the host was last told, -1 = tell again */
-    std::atomic<int> fold_push{0};
-    int last_sel = -1, last_count = -1;
+    std::atomic<int> fold_rep[decks::FROWS];   /* as row_rep, for the folder rows */
+    int last_sel = -1, last_count = -1, last_fsel = -1, last_fcount = -1;
     /* for the skin's text, written by the audio thread each block */
     struct Ui {
         std::atomic<int> state{0};             /* 0 empty, 1 stopped, 2 playing, 3 waiting */
@@ -415,9 +418,18 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
     /* the TRACK knob and the list rows follow the selection */
     const int sel = w->lib.sel.load(), cnt = w->lib.count.load();
     if (w->lib.sel_changed.exchange(0) || sel != w->last_sel || cnt != w->last_count) {
+        const bool recount = cnt != w->last_count;
         w->last_sel = sel; w->last_count = cnt;
         const float kn = cnt > 1 ? (float)sel / (float)(cnt - 1) : 0.0f;
-        if (std::fabs(w->cache[IDX[TRACK]].load() * (cnt > 1 ? cnt - 1 : 1) - sel) > 0.5f) set_norm(w, TRACK, kn);
+        /* a new list length always: the host shows the knob's text only after a report */
+        if (recount || std::fabs(w->cache[IDX[TRACK]].load() * (cnt > 1 ? cnt - 1 : 1) - sel) > 0.5f) set_norm(w, TRACK, kn);
+    }
+    const int fsel = w->lib.fsel.load(), fcnt = w->lib.fcount.load();
+    if (fsel != w->last_fsel || fcnt != w->last_fcount) {   /* the FOLDER knob follows the folder selection */
+        const bool recount = fcnt != w->last_fcount;
+        w->last_fsel = fsel; w->last_fcount = fcnt;
+        const float kn = fcnt > 1 ? (float)fsel / (float)(fcnt - 1) : 0.0f;
+        if (recount || std::fabs(w->cache[IDX[FOLDER]].load() * (fcnt > 1 ? fcnt - 1 : 1) - fsel) > 0.5f) set_norm(w, FOLDER, kn);
     }
     bool any = false;
     const int top = top_row(w);
@@ -429,9 +441,13 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
             any = true;
         }
     }
-    if (w->fold_push.exchange(0)) {
-        for (int r = 0; r < decks::FROWS; r++) w->master(&w->fx, audioMasterAutomate, IDX[FOLD_1 + r], 0, 0, 0.0f);
-        any = true;
+    for (int r = 0; r < decks::FROWS; r++) {
+        const int want = w->lib.ftop.load() + r == fsel && fsel < fcnt ? 1 : 0;
+        if (w->fold_rep[r].load() != want) {
+            w->fold_rep[r].store(want);
+            w->master(&w->fx, audioMasterAutomate, IDX[FOLD_1 + r], 0, 0, (float)want);
+            any = true;
+        }
     }
     for (int i = 0; i < NPARAMS; i++) {
         /* a trigger reports itself released to the host (the Force sends no setParameter(0) after a tap) */
@@ -479,14 +495,19 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         w->row_rep[r].store(-1);   /* tell the host the real state again */
         return;
     }
-    if (is_fold(key)) {
-        if (n > 0.5f) w->lib.enter_req.store(key - FOLD_1 + 1);
-        w->fold_push.store(1);
+    if (is_fold(key)) {   /* a tap opens the folder (as for the track rows: a value change is a tap) */
+        const int r = key - FOLD_1;
+        if ((n > 0.5f ? 1 : 0) == w->fold_rep[r].load()) return;
+        const int f = w->lib.ftop.load() + r;
+        if (f < w->lib.fcount.load()) w->lib.enter_req.store(f + 1);
+        w->fold_rep[r].store(-1);
         return;
     }
-    if (key == FOLDER) {
-        const int maxtop = std::max(0, w->lib.fcount.load() - decks::FROWS);
-        w->lib.ftop.store((int)std::lround(clamp01(n) * maxtop));
+    if (key == FOLDER) {   /* the knob selects a folder of the whole list, the rows page along; OPEN opens it */
+        const int fc = w->lib.fcount.load();
+        const int f = fc > 1 ? clampi((int)std::lround(clamp01(n) * (fc - 1)), 0, fc - 1) : 0;
+        w->lib.fsel.store(f);
+        w->lib.ftop.store((f / decks::FROWS) * decks::FROWS);
         w->cache[i].store(clamp01(n));
         return;
     }
@@ -517,6 +538,7 @@ static void setParameter(AEffect *e, int32_t i, float n) {
                 break;
             }
             case UP: w->lib.up_req.store(true); break;
+            case OPEN: if (w->lib.fcount.load() > 0) w->lib.enter_req.store(w->lib.fsel.load() + 1); break;
             case USE: w->lib.use_req.store(true); break;
             case REMOVE: w->lib.remove_req.store(true); break;
             default: break;
@@ -543,7 +565,8 @@ static float getParameter(AEffect *e, int32_t i) {
     Plugin *w = (Plugin *)e->object;
     if (i < 0 || i >= NPARAMS) return 0.0f;
     const int key = KEY_OF[i];
-    if (key >= 0 && (is_trigger(key) || is_fold(key) || is_text(key))) return 0.0f;
+    if (key >= 0 && (is_trigger(key) || is_text(key))) return 0.0f;
+    if (key >= 0 && is_fold(key)) return w->fold_rep[key - FOLD_1].load() > 0 ? 1.0f : 0.0f;
     if (key >= 0 && is_row(key)) return w->row_rep[key - ROW_1].load() > 0 ? 1.0f : 0.0f;
     if (popup_is(i)) return w->open[i];
     return w->cache[i].load();
@@ -676,6 +699,11 @@ static std::string text_of(Plugin *w, int key) {
     case INFO_A: case INFO_B: return deck_info(w, key == INFO_B);
     case BAR_A: case BAR_B: return deck_bar(w, key == BAR_B);
     case STATUS: { std::lock_guard<std::mutex> lk(w->lib.mtx); return decks::ascii(w->lib.status, 100); }
+    case HELP_1: return sw(w, CLOCK) ? "FORCE: both decks follow the Force transport" : "DECKS: the deck started last leads at its own tempo, the other follows";
+    case HELP_2: return "Pads  36 PLAY A   37 CUE A   38 SYNC A   39 LOAD A";
+    case HELP_3: return "Pads  40 PLAY B   41 CUE B   42 SYNC B   43 LOAD B";
+    case HELP_4: return "Pads  44 TRACK UP   45 TRACK DOWN   46 PAGE UP   47 PAGE DOWN";
+    case HELP_5: return "Decks 0.3.0";
     case LIB_INFO: {
         const int cnt = w->lib.count.load(), sel = w->lib.sel.load();
         if (!cnt) return "NO TRACKS";
@@ -732,12 +760,12 @@ static void display(Plugin *w, int idx, char *buf, size_t n) {
     switch (key) {
     case TRACK: {
         const int cnt = w->lib.count.load();
-        if (cnt) std::snprintf(buf, n, "%d / %d", w->lib.sel.load() + 1, cnt); else std::snprintf(buf, n, "-");
+        if (cnt) std::snprintf(buf, n, "%d / %d", w->lib.sel.load() + 1, cnt); else std::snprintf(buf, n, "NO TRACKS");
         return;
     }
     case FOLDER: {
-        const int fc = w->lib.fcount.load(), t = w->lib.ftop.load();
-        if (fc) std::snprintf(buf, n, "%d-%d / %d", t + 1, std::min(fc, t + decks::FROWS), fc); else std::snprintf(buf, n, "-");
+        const int fc = w->lib.fcount.load();
+        if (fc) std::snprintf(buf, n, "%d / %d", w->lib.fsel.load() + 1, fc); else std::snprintf(buf, n, "NO FOLDERS");
         return;
     }
     case DRIVE: {
@@ -781,7 +809,8 @@ static intptr_t dispatcher(AEffect *e, int32_t op, int32_t idx, intptr_t v, void
     case effGetVendorString: copy_str(p, PLUG_VENDOR, 32); return 1;
     case effGetVendorVersion: return PLUG_VERSION;
     case effGetVstVersion: return 2400;
-    case effCanBeAutomated: return idx >= 0 && idx < NPARAMS && KEY_OF[idx] >= 0 && is_setting(KEY_OF[idx]);
+    /* every control: the Q-Links only move parameters the plugin reports as automatable */
+    case effCanBeAutomated: return idx >= 0 && idx < NPARAMS && KEY_OF[idx] >= 0 && !is_text(KEY_OF[idx]);
     case effGetParamName: if (idx >= 0 && idx < NPARAMS) copy_str(p, PARAMS[idx].name, 32); return 1;
     case effGetParamLabel: if (idx >= 0 && idx < NPARAMS) copy_str(p, PARAMS[idx].unit, 8); return 1;
     case effGetParamDisplay: {
@@ -814,6 +843,7 @@ extern "C" __attribute__((visibility("default"))) AEffect *VSTPluginMain(audioMa
     w->master = master;
     for (int i = 0; i < NPARAMS; i++) { w->cache[i].store(PARAMS[i].def); w->notify[i].store(0); }
     for (auto &r : w->row_rep) r.store(-1);
+    for (auto &r : w->fold_rep) r.store(-1);
     start_values(w);
     set_norm(w, DRIVE, 0);
     w->lib.start(decks::data_dir("/decks.so"));

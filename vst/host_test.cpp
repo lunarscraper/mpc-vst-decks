@@ -126,6 +126,8 @@ static int param(AEffect *e, const char *name) {
 static std::string display(AEffect *e, const char *name) { char buf[300] = {0}; e->dispatcher(e, 7, param(e, name), 0, buf, 0); return buf; }
 static void setn(AEffect *e, const char *name, float n) { e->setParameter(e, param(e, name), n); }
 static void press(AEffect *e, const char *name) { setn(e, name, 1); setn(e, name, 0); }
+/* a tap on a list row: MPC's Toggle Switch sends the opposite of what the row shows */
+static void tap(AEffect *e, const char *name) { const int i = param(e, name); e->setParameter(e, i, e->getParameter(e, i) > 0.5f ? 0.0f : 1.0f); }
 static void send(AEffect *e, int a, int b, int c) {
     VstMidiEvent m; std::memset(&m, 0, sizeof m);
     m.type = 1; m.byteSize = sizeof m;
@@ -279,16 +281,26 @@ int main(int argc, char **argv) {
     run(e, 0.1);
     CHECK(wait_for(e, "Folder Row 1", "> Music"), "folder rows: %s", display(e, "Folder Row 1").c_str());
     CHECK(display(e, "Folder Row 2") == "> Other", "second folder: %s", display(e, "Folder Row 2").c_str());
-    setn(e, "Folder Row 1", 1);   /* tap: open Music */
+    tap(e, "Folder Row 1");   /* tap: open Music */
     CHECK(wait_for(e, "Path", "drive1:/Music"), "opened Music: %s", display(e, "Path").c_str());
     CHECK(display(e, "Folder Row 1") == "> Goa", "Music's subfolder: %s", display(e, "Folder Row 1").c_str());
     press(e, "Up");
     CHECK(wait_for(e, "Path", "drive1:/   (2"), "UP: %s", display(e, "Path").c_str());
+    run(e, 0.05);
+    CHECK(e->getParameter(e, param(e, "Folder Row 1")) > 0.5f, "first folder selected");
+    CHECK(display(e, "Folder") == "1 / 2", "FOLDER knob text: %s", display(e, "Folder").c_str());
+    setn(e, "Folder", 1.0f);   /* knob: the second folder ... */
+    run(e, 0.05);
+    CHECK(e->getParameter(e, param(e, "Folder Row 2")) > 0.5f && display(e, "Folder") == "2 / 2", "knob selects Other: %s", display(e, "Folder").c_str());
+    press(e, "Open Folder");   /* ... and OPEN */
+    CHECK(wait_for(e, "Path", "drive1:/Other"), "OPEN: %s", display(e, "Path").c_str());
+    press(e, "Up");
+    CHECK(wait_for(e, "Path", "drive1:/   (2"), "UP again: %s", display(e, "Path").c_str());
     press(e, "Up");   /* never above the drive */
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     run(e, 0.1);
     CHECK(wait_for(e, "Path", "drive1:/   (2"), "UP stops at the drive: %s", display(e, "Path").c_str());
-    setn(e, "Folder Row 1", 1);
+    tap(e, "Folder Row 1");
     wait_for(e, "Path", "drive1:/Music");
     press(e, "Use Folder");
     CHECK(wait_for(e, "Status", "4 TRACKS"), "scan of Music: %s", display(e, "Status").c_str());
@@ -302,7 +314,7 @@ int main(int argc, char **argv) {
     CHECK(e->getParameter(e, param(e, "Row 1")) > 0.5f, "row 1 selected at first");
 
     /* -- select by tapping a row, load A, analysis -- */
-    setn(e, "Row 4", 1);
+    tap(e, "Row 4");
     run(e, 0.05);
     CHECK(e->getParameter(e, param(e, "Row 4")) > 0.5f && e->getParameter(e, param(e, "Row 1")) < 0.5f, "tap selects row 4");
     CHECK(display(e, "Track") == "4 / 4", "TRACK knob follows: %s", display(e, "Track").c_str());
@@ -379,14 +391,14 @@ int main(int argc, char **argv) {
     }
 
     /* -- loading onto a playing deck is refused -- */
-    setn(e, "Row 1", 1);
+    tap(e, "Row 1");
     run(e, 0.05);
     press(e, "Load A");
     CHECK(wait_for(e, "Status", "IS PLAYING"), "load onto a playing deck refused: %s", display(e, "Status").c_str());
     CHECK(display(e, "Title A").find("techno 128") != std::string::npos, "deck A keeps its track");
 
     /* -- deck B: 140 BPM mono at 48 kHz, free running with the transport stopped -- */
-    setn(e, "Row 2", 1);
+    tap(e, "Row 2");
     run(e, 0.05);
     press(e, "Load B");
     CHECK(wait_for(e, "Title B", "mono 140"), "deck B loaded");
@@ -450,7 +462,7 @@ int main(int argc, char **argv) {
     press(e, "Drive Next");
     run(e, 0.1);
     CHECK(wait_for(e, "Path", "drive2:/"), "drive 2: %s", display(e, "Path").c_str());
-    setn(e, "Folder Row 1", 1);
+    tap(e, "Folder Row 1");
     wait_for(e, "Path", "drive2:/Set");
     press(e, "Use Folder");
     CHECK(wait_for(e, "Status", "5 TRACKS"), "two sources: %s", display(e, "Status").c_str());
@@ -492,7 +504,7 @@ int main(int argc, char **argv) {
     setn(e, "Crossfader", 0.5f);
     g_play = false;
     pad_note(e, 37);   /* CUE A: back to the first kick */
-    setn(e, "Row 2", 1);
+    tap(e, "Row 2");
     run(e, 0.05);
     pad_note(e, 43);   /* mono 140 onto B */
     CHECK(wait_for(e, "Title B", "mono 140"), "B for the own clock");

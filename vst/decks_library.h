@@ -242,7 +242,8 @@ struct Library {
     std::atomic<int> ftop{0};                                     /* first folder row shown */
     std::atomic<int> fcount{0};
     std::atomic<int> ndrives{0};
-    std::atomic<int> enter_req{0};                                /* folder row + 1 */
+    std::atomic<int> enter_req{0};                                /* folder (list index) + 1 */
+    std::atomic<int> fsel{0};                                     /* folder selected with the FOLDER knob */
     std::atomic<bool> up_req{false}, use_req{false}, remove_req{false}, rescan_req{true};
     std::atomic<bool> quit{false};
     std::atomic<int> loading[2] = {{0}, {0}};                     /* 1 while a deck's track is being read */
@@ -441,6 +442,7 @@ struct Library {
         }
         std::sort(folders.begin(), folders.end(), [](const std::string &a, const std::string &b) { return lower(a) < lower(b); });
         fcount.store((int)folders.size());
+        fsel.store(0);
         ftop.store(0);
     }
     /* the folder browser follows the drive chosen; it opens at that drive's source folder */
@@ -473,7 +475,7 @@ struct Library {
                 list_folders_locked();
             }
             if (en > 0) {
-                const int i = ftop.load() + en - 1;
+                const int i = en - 1;
                 if (i >= 0 && i < (int)folders.size()) { fpath += "/" + folders[(size_t)i]; list_folders_locked(); }
             }
             if (use) {
