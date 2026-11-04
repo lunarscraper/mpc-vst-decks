@@ -1,0 +1,30 @@
+name: VST release (draft)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version, e.g. 0.1.0
+        required: true
+        default: 0.1.0
+      dry_run:
+        description: Build only (zip + skin previews as run artifacts), no draft release
+        type: boolean
+        default: true
+
+jobs:
+  decks:
+    uses: open-mpc/mpc-vst-plugins/.github/workflows/vst-release.yml@8e266cec8abd3d780e331404209c3e8b8f699c5c
+    permissions:
+      contents: write
+    with:
+      tag: decks-vst-v${{ inputs.version }}
+      version: ${{ inputs.version }}
+      tools_ref: 8e266cec8abd3d780e331404209c3e8b8f699c5c
+      vst_dir: vst
+      build: bash vst/build.sh
+      host_test: bash vst/test.sh
+      plugin_id: decks
+      license: MIT
+      about: Two-deck DJ player in the manner of Mixxx - tracks (WAV, AIFF, FLAC, MP3) from freely chosen music folders on any mounted drive (internal storage, SSD, SD card, USB), read automatically; tempo and beatgrid analysis; both decks locked to the Force clock (vinyl style, quantised start on beat or bar, nudge); volumes, crossfader, master; pads for play, cue, sync and load.
+      dry_run: ${{ inputs.dry_run }}
