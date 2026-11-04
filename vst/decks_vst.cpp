@@ -18,6 +18,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <time.h>
 #include <vector>
 
 #include "params.h"
@@ -125,6 +126,9 @@ struct Plugin {
     float open[NPARAMS] = {0};
     volatile int release[NPARAMS] = {0};
     bool down[NPARAMS] = {false};
+    long long press_ms[NPARAMS] = {0};   /* triggers: when the last press that was acted on came (debounce) */
+    long long row_ms = 0, fold_ms = 0;   /* the same for a tap on a track row / a folder row */
+    int display_wait = 0;                /* frames until the next audioMasterUpdateDisplay may go out */
     std::atomic<bool> dirty{true};
     decks::Deck deck[2];
     decks::Library lib;
@@ -456,7 +460,13 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
         any = true;
         w->master(&w->fx, audioMasterAutomate, i, 0, 0, w->cache[i].load());
     }
-    if (any) w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
+    /* MPC rebuilds its parameter screen on every UpdateDisplay: at most one per 50 ms (as the
+     * shared wrapper since 2026-10-21), never one per block - a knob being turned would stall */
+    if (w->display_wait > 0) w->display_wait -= n;
+    if (any && w->display_wait <= 0) {
+        w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
+        w->display_wait = (int)(0.05 * w->clk.sr);
+    }
 }
 
 static intptr_t process_events(Plugin *w, const VstEvents *evs) {
@@ -473,11 +483,21 @@ static intptr_t process_events(Plugin *w, const VstEvents *evs) {
     return 1;
 }
 
+enum { DEBOUNCE_MS = 250 };
+static long long now_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+}
+
 static void setParameter(AEffect *e, int32_t i, float n) {
     Plugin *w = (Plugin *)e->object;
     if (i < 0 || i >= NPARAMS) return;
     const param_t *p = &PARAMS[i];
-    if (popup_set(w->open, i, n)) return;
+    if (popup_set(w->open, i, n)) {
+        if (w->open[i] > 0.5f) popup_close_others(w->open, w->release, i);   /* one list at a time */
+        return;
+    }
     const int key = KEY_OF[i];
     if (key < 0 || is_text(key)) return;
     if (key == TRACK) {   /* the knob browses the whole list */
@@ -490,6 +510,9 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         const int r = key - ROW_1;
         const int want = n > 0.5f ? 1 : 0;
         if (want == w->row_rep[r].load()) return;
+        const long long now = now_ms();
+        if (now - w->row_ms < DEBOUNCE_MS) return;   /* the second half of one tap */
+        w->row_ms = now;
         const int s = top_row(w) + r;
         if (s < w->lib.count.load()) select_track(w, s);
         w->row_rep[r].store(-1);   /* tell the host the real state again */
@@ -498,6 +521,9 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     if (is_fold(key)) {   /* a tap opens the folder (as for the track rows: a value change is a tap) */
         const int r = key - FOLD_1;
         if ((n > 0.5f ? 1 : 0) == w->fold_rep[r].load()) return;
+        const long long now = now_ms();
+        if (now - w->fold_ms < DEBOUNCE_MS) return;   /* one tap, not two folders deep */
+        w->fold_ms = now;
         const int f = w->lib.ftop.load() + r;
         if (f < w->lib.fcount.load()) w->lib.enter_req.store(f + 1);
         w->fold_rep[r].store(-1);
@@ -519,8 +545,16 @@ static void setParameter(AEffect *e, int32_t i, float n) {
     }
     if (is_trigger(key)) {
         const bool down = n > 0.5f;
-        const bool rising = down && !w->down[i];   /* an echo of our own automate must not fire again */
+        bool rising = down && !w->down[i];   /* an echo of our own automate must not fire again */
         w->down[i] = down;
+        /* MPC delivers one tap on a drawn button as two presses 30 to 140 ms apart, with no
+         * release between (shared wrapper fix of 2026-10-30): PLAY started and stopped again
+         * at once, OPEN went two folders deep. A second press within 250 ms is ignored. */
+        if (rising) {
+            const long long now = now_ms();
+            if (w->press_ms[i] && now - w->press_ms[i] < DEBOUNCE_MS) { rising = false; w->release[i] = 1; }   /* still spring back */
+            else w->press_ms[i] = now;
+        }
         if (rising) {
             const int nd = std::max(1, w->lib.ndrives.load());
             switch (key) {
@@ -544,7 +578,6 @@ static void setParameter(AEffect *e, int32_t i, float n) {
             default: break;
             }
             w->release[i] = 1;
-            w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
         }
         return;
     }
@@ -703,7 +736,7 @@ static std::string text_of(Plugin *w, int key) {
     case HELP_2: return "Pads  36 PLAY A   37 CUE A   38 SYNC A   39 LOAD A";
     case HELP_3: return "Pads  40 PLAY B   41 CUE B   42 SYNC B   43 LOAD B";
     case HELP_4: return "Pads  44 TRACK UP   45 TRACK DOWN   46 PAGE UP   47 PAGE DOWN";
-    case HELP_5: return "Decks 0.3.0";
+    case HELP_5: return "Decks 0.3.1";
     case LIB_INFO: {
         const int cnt = w->lib.count.load(), sel = w->lib.sel.load();
         if (!cnt) return "NO TRACKS";

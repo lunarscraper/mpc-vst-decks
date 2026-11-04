@@ -15,6 +15,16 @@ Schlanker DJ-Player mit zwei Decks und Crossfader in **einem** Plugin, angelehnt
 | Bedienung | Force-Pads, Q-Links (nur Regler, keine Tasten) und große Touch-Flächen |
 | Samplerate | Force 44,1 kHz; Tracks mit anderer Rate (z. B. 48 kHz) werden über die Abspielrate ausgeglichen (gleiches Ergebnis wie Umrechnen beim Laden, spart Zeit und RAM) |
 
+## Update 0.3.1 – Stand von mpc-vst-plugins übernommen
+
+Decks nutzt wie Rattler eine **handgeschriebene VST2-Hülle**, nicht den gemeinsamen Wrapper `vst2_wrap.c` – Wrapper-Fixes kommen also nicht von selbst an. Abgeglichen mit `open-mpc/mpc-vst-plugins` (Stand `8e266ce`, 2026-11-04) und übernommen, was für die Hülle gilt:
+- **Doppelter Tastendruck** (Fix 2026-10-30): MPC liefert einen Tipp auf eine gezeichnete Taste als zwei Drücke 30–140 ms hintereinander. Ein zweiter Druck innerhalb von 250 ms wird ignoriert – für alle Tasten und für Antippen von Track- und Ordnerzeilen. Ohne das startete PLAY und stoppte sofort wieder, OPEN ging zwei Ordner tief.
+- **UpdateDisplay** (Fixes 2026-10-21): kein Aufruf mehr direkt nach einem Tastendruck, höchstens einer pro 50 ms. MPC baut bei jedem Aufruf den Bildschirm neu auf, das konnte Q-Links beim Drehen blockieren.
+- **Popups** (Fix 2026-10-07): Öffnen einer Auswahlliste schließt die anderen.
+- Workflow zeigt auf `open-mpc/mpc-vst-plugins` (Umzug von `sd88me`), `params.lock` (neu im Generator: hält die Parameter-Reihenfolge fest) liegt bei.
+
+Nicht übernommen, weil für Decks ohne Wirkung: NRPN/CC-Steuerung des Wrappers, Effekt-Eingang bei In-place-Puffern (Decks ist ein Instrument), Gen2-Kernzuordnung, das Halten von Parameter 0 beim STOP (Parameter 0 ist VOL A; MPC setzt ihn kurz ans Ende und sofort zurück, das wirkt erst im nächsten Block und damit gar nicht).
+
 ## Update 0.3.0 – Bedienung am Gerät
 
 Nach dem Test auf der Force:

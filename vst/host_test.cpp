@@ -125,9 +125,16 @@ static int param(AEffect *e, const char *name) {
 }
 static std::string display(AEffect *e, const char *name) { char buf[300] = {0}; e->dispatcher(e, 7, param(e, name), 0, buf, 0); return buf; }
 static void setn(AEffect *e, const char *name, float n) { e->setParameter(e, param(e, name), n); }
-static void press(AEffect *e, const char *name) { setn(e, name, 1); setn(e, name, 0); }
+/* a tap on a drawn button; 260 ms apart, as the plugin ignores a second press within 250 ms */
+static void press(AEffect *e, const char *name) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(260));
+    setn(e, name, 1); setn(e, name, 0);
+}
 /* a tap on a list row: MPC's Toggle Switch sends the opposite of what the row shows */
-static void tap(AEffect *e, const char *name) { const int i = param(e, name); e->setParameter(e, i, e->getParameter(e, i) > 0.5f ? 0.0f : 1.0f); }
+static void tap(AEffect *e, const char *name) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(260));
+    const int i = param(e, name); e->setParameter(e, i, e->getParameter(e, i) > 0.5f ? 0.0f : 1.0f);
+}
 static void send(AEffect *e, int a, int b, int c) {
     VstMidiEvent m; std::memset(&m, 0, sizeof m);
     m.type = 1; m.byteSize = sizeof m;
@@ -447,6 +454,17 @@ int main(int argc, char **argv) {
     press(e, "Play A");   /* pause */
     run(e, 0.1);
     CHECK(display(e, "Info A").find("STOP") == 0, "PLAY pauses: %s", display(e, "Info A").c_str());
+    {   /* MPC delivers one tap as two presses, 30-140 ms apart, no release between: one action */
+        std::this_thread::sleep_for(std::chrono::milliseconds(260));
+        const int pa = param(e, "Play A");
+        e->setParameter(e, pa, 1); run(e, 0.03);
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        e->setParameter(e, pa, 1); run(e, 0.05);
+        CHECK(display(e, "Info A").find("STOP") != 0, "a doubled tap starts A once (not start + stop): %s", display(e, "Info A").c_str());
+        press(e, "Play A");
+        run(e, 0.05);
+        CHECK(display(e, "Info A").find("STOP") == 0, "the next real tap stops it: %s", display(e, "Info A").c_str());
+    }
 
     /* -- no beat: the ambient pad -- */
     pad_note(e, 45); pad_note(e, 44); pad_note(e, 44); pad_note(e, 44);   /* 2 -> 3 -> 2 -> 1 -> 1 */
