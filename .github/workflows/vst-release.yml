@@ -14,13 +14,13 @@ on:
 
 jobs:
   decks:
-    uses: sd88me/mpc-vst-plugins/.github/workflows/vst-release.yml@259f75d0ce0f836cfd89cc0a33c550b55917cffc
+    uses: open-mpc/mpc-vst-plugins/.github/workflows/vst-release.yml@8e266cec8abd3d780e331404209c3e8b8f699c5c
     permissions:
       contents: write
     with:
       tag: decks-vst-v${{ inputs.version }}
       version: ${{ inputs.version }}
-      tools_ref: 259f75d0ce0f836cfd89cc0a33c550b55917cffc
+      tools_ref: 8e266cec8abd3d780e331404209c3e8b8f699c5c
       vst_dir: vst
       build: bash vst/build.sh
       host_test: bash vst/test.sh
