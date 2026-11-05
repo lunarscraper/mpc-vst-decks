@@ -15,6 +15,27 @@ Schlanker DJ-Player mit zwei Decks und Crossfader in **einem** Plugin, angelehnt
 | Bedienung | Force-Pads, Q-Links (nur Regler, keine Tasten) und große Touch-Flächen |
 | Samplerate | Force 44,1 kHz; Tracks mit anderer Rate (z. B. 48 kHz) werden über die Abspielrate ausgeglichen (gleiches Ergebnis wie Umrechnen beim Laden, spart Zeit und RAM) |
 
+## Update 0.4.0 – Stil-Crates und AUTO
+
+Für den Einsatz als Notlösung, Pausenfüller und für kurze private Sessions, mit Tracks, die in Ordnern nach Stilen vorsortiert sind.
+
+**Stil-Crates (BROWSER):** Jeder Ordner direkt unter einem Musikordner (Quelle) ist ein Stil. Oben im BROWSER wählst du mit den Pfeilen oder dem STYLE-Regler (Q-Link 1) zwischen `ALL` und den Stilen, z. B. `STYLE 3/7: Goa (54 TRACKS)`; die Liste zeigt dann nur diesen Stil, Unterordner darin eingeschlossen. Gleich benannte Stilordner auf verschiedenen Laufwerken landen in einem Crate. Tracks, die direkt im Musikordner liegen, bilden `(TOP FOLDER)`. Wähle als Quelle also den Hauptordner, in dem die Stilordner liegen. Nach RESCAN oder einem Laufwerkswechsel bleibt der gewählte Stil erhalten.
+
+**AUTO (BROWSER, Pad 48):** Spielt das gewählte Crate selbstständig, **in fester Reihenfolge** (wie in der Liste), beginnend beim gewählten Track; nach dem letzten geht es mit dem ersten weiter.
+- Läuft nichts, lädt AUTO den gewählten Track auf A und startet ihn; der Crossfader geht ganz auf A.
+- Das freie Deck bekommt sofort den nächsten Track. Dessen Anzeige zählt herunter: `AUTO NEXT in 12 BARS`.
+- **AUTO MIX** (SETUP: 4, 8, 16, 32 Takte; Voreinstellung 8) Takte vor Trackende startet das nächste Deck auf dem Takt, der Crossfader fährt in dieser Zeit hinüber, danach stoppt das alte Deck und bekommt den übernächsten Track. Das Tempo geht über GLIDE zum neuen Track (bei `CLOCK DECKS`).
+- Gestartet wird am ersten Kick des Tracks (Cue nach dem Laden); ein Track ohne Tempo wird wie 120 BPM gezählt.
+- Eingreifen geht jederzeit: einen anderen Track aufs wartende Deck laden (der kommt dann als Nächstes), selbst mischen (spielen beide Decks, hält sich AUTO heraus), Lautstärken, Pitch. **Stoppst du von Hand alles, schaltet AUTO ab** (`AUTO OFF (STOPPED BY HAND)`) und startet nichts neu.
+- AUTO wird nicht mit dem Projekt gespeichert – ein geladenes Projekt fängt nie von selbst an zu spielen.
+- Ein Track, der sich nicht lesen lässt, wird übersprungen; nach fünf Fehlschlägen in Folge schaltet AUTO ab.
+
+Grenze: Decks läuft im Programm der Force. Stürzt die Force als Ganzes ab, ist auch Decks weg; für diesen Fall braucht es einen unabhängigen Zuspieler.
+
+## Update 0.3.2 – Anzeigen laufen mit
+
+Auf der Force blieben Zeit und Positionsbalken eines laufenden Decks stehen. MPC liest den Text von Anzeige-Feldern nur nach einem `UpdateDisplay` neu – es fragt ihn nicht von selbst ab. Gelöst wie im gemeinsamen Wrapper (und in reMixXXL, das ihn nutzt): Alle 100 ms prüft Decks, ob sich etwas Sichtbares geändert hat (Sekunde, Schlag, Zustand, Tempo, Statuszeile, Listen, Ordner), und fordert dann ein `UpdateDisplay` an – höchstens 10 pro Sekunde. Die Lock-Abweichung in ms allein löst keine Aktualisierung aus (sie würde sonst ständig neu zeichnen); sie läuft mit jedem Schlag mit.
+
 ## Update 0.3.1 – Stand von mpc-vst-plugins übernommen
 
 Decks nutzt wie Rattler eine **handgeschriebene VST2-Hülle**, nicht den gemeinsamen Wrapper `vst2_wrap.c` – Wrapper-Fixes kommen also nicht von selbst an. Abgeglichen mit `open-mpc/mpc-vst-plugins` (Stand `8e266ce`, 2026-11-04) und übernommen, was für die Hülle gilt:
@@ -66,9 +87,9 @@ Umgesetzt in drei Teilen plus Hülle:
 | Seite | Inhalt | Q-Links |
 |---|---|---|
 | DECKS | links Deck A, rechts Deck B: Titel, Tempo/Zeit, Positionsbalken mit Takt.Schlag und Lock-Abweichung; PLAY, CUE, SYNC je Deck; MASTER und X-FADE in der Mitte | 1 PITCH A · 2 NUDGE A · 3 VOL A · 4 X-FADE · 5 VOL B · 6 NUDGE B · 7 PITCH B · 8 MASTER (gespiegelt wie ein DJ-Mixer) |
-| BROWSER | Track-Liste mit 8 großen Zeilen (Tempo, Name, `[A]`/`[B]` für geladene Tracks), Antippen wählt aus; LOAD A, LOAD B, RESCAN; Statuszeile | TRACK (blättert durch die ganze Liste) |
+| BROWSER | Stil-Wahl (Pfeile), Track-Liste mit 8 großen Zeilen (Tempo, Name, `[A]`/`[B]` für geladene Tracks), Antippen wählt aus; LOAD A, LOAD B, AUTO, RESCAN; Statuszeile | STYLE, TRACK (blättert durch die ganze Liste) |
 | SOURCE | Laufwerk (Pfeile), aktueller Ordner, 6 Unterordner (Antippen öffnet), OPEN (gewählter Ordner), UP, USE FOLDER, REMOVE; Quellen-Übersicht, Status | DRIVE, FOLDER (wählt den Ordner) |
-| SETUP | CLOCK (DECKS/FORCE), GLIDE, QUANTIZE (OFF/BEAT/BAR), MASTER, Pad-Belegung | CLOCK, GLIDE, QUANTIZE, MASTER |
+| SETUP | CLOCK (DECKS/FORCE), GLIDE, QUANTIZE (OFF/BEAT/BAR), AUTO MIX, MASTER, Pad-Belegung | CLOCK, GLIDE, QUANTIZE, AUTO MIX, MASTER |
 
 Außerhalb des Seiten-Folgemodus liegen die DECKS-Regler auf den Q-Links.
 
@@ -115,6 +136,7 @@ Außerhalb des Seiten-Folgemodus liegen die DECKS-Regler auf den Q-Links.
 | 37 | CUE | 41 | CUE | 45 | Track runter |
 | 38 | SYNC an/aus | 42 | SYNC an/aus | 46 | Seite hoch |
 | 39 | LOAD (gewählter Track) | 43 | LOAD | 47 | Seite runter |
+|  |  |  |  | 48 | AUTO an/aus |
 
 Die Pads müssen chromatisch ab C1 (36) senden, z. B. im Pad-Modus „Notes“ ohne Skala oder per Drum-Pad-Belegung.
 

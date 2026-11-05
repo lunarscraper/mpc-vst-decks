@@ -84,6 +84,8 @@ enum {
     CLOCK, GLIDE,
     /* update 0.3, appended */
     OPEN, HELP_1, HELP_2, HELP_3, HELP_4, HELP_5,
+    /* update 0.4, appended */
+    STYLE, STYLE_PREV, STYLE_NEXT, AUTO, MIX,
     NKEYS
 };
 static const char *const KEYS[NKEYS] = {
@@ -98,12 +100,14 @@ static const char *const KEYS[NKEYS] = {
     "title_a", "info_a", "bar_a", "title_b", "info_b", "bar_b", "lib_info", "status", "path", "sources",
     "clock", "glide",
     "open", "help_1", "help_2", "help_3", "help_4", "help_5",
+    "style", "style_prev", "style_next", "auto", "mix",
 };
 static int IDX[NKEYS];
 static int KEY_OF[NPARAMS];   /* PARAMS[] position -> key enum, -1 = not ours */
 static bool is_trigger(int k) {
     return k == PLAY_A || k == CUE_A || k == PLAY_B || k == CUE_B || k == LOAD_A || k == LOAD_B || k == RESCAN ||
-           k == DRIVE_PREV || k == DRIVE_NEXT || k == UP || k == USE || k == REMOVE || k == OPEN;
+           k == DRIVE_PREV || k == DRIVE_NEXT || k == UP || k == USE || k == REMOVE || k == OPEN ||
+           k == STYLE_PREV || k == STYLE_NEXT;
 }
 static bool is_row(int k) { return k >= ROW_1 && k <= ROW_8; }
 static bool is_fold(int k) { return k >= FOLD_1 && k <= FOLD_6; }
@@ -111,7 +115,7 @@ static bool is_text(int k) { return (k >= TITLE_A && k <= SOURCES) || (k >= HELP
 /* what the project chunk keeps: the mixer and the deck settings */
 static bool is_setting(int k) {
     return k == VOL_A || k == VOL_B || k == XFADE || k == MASTER || k == SYNC_A || k == PITCH_A || k == NUDGE_A ||
-           k == SYNC_B || k == PITCH_B || k == NUDGE_B || k == QUANT || k == CLOCK || k == GLIDE;
+           k == SYNC_B || k == PITCH_B || k == NUDGE_B || k == QUANT || k == CLOCK || k == GLIDE || k == MIX;   /* not AUTO: a project must not start playing on its own */
 }
 
 enum { NEV = 256 };
@@ -129,6 +133,9 @@ struct Plugin {
     long long press_ms[NPARAMS] = {0};   /* triggers: when the last press that was acted on came (debounce) */
     long long row_ms = 0, fold_ms = 0;   /* the same for a tap on a track row / a folder row */
     int display_wait = 0;                /* frames until the next audioMasterUpdateDisplay may go out */
+    int text_poll = 0;                   /* frames until the readouts are checked again */
+    unsigned last_text = 0;              /* what they showed at the last check (a hash) */
+    bool display_pending = false;        /* an UpdateDisplay is due, as soon as the 50 ms allow */
     std::atomic<bool> dirty{true};
     decks::Deck deck[2];
     decks::Library lib;
@@ -160,6 +167,17 @@ struct Plugin {
     bool force_rolling = false;
     double force_tempo = 120;
     std::atomic<int> ui_leader{-1};
+    /* AUTO: plays the crate in its order. The free deck gets the next track; it starts (on the
+     * bar) MIX bars before the playing one ends and the crossfader moves over during those bars */
+    bool fresh[2] = {false, false};      /* a track on the deck that has not played yet */
+    bool pend[2] = {false, false};       /* an AUTO load is under way */
+    bool auto_play[2] = {false, false};  /* AUTO presses PLAY (not counted as a manual stop) */
+    bool mixing = false;
+    int mix_from = 0, mix_to = 1, auto_last = -1, auto_fails = 0;
+    double mix_done = 0, mix_total = 32;
+    int xf_notify = 0;
+    std::atomic<float> next_bars[2] = {{-1.0f}, {-1.0f}};
+    int last_style = -1, last_nstyles = -1;
     std::atomic<float> ui_tempo{120};
     std::vector<uint8_t> chunk;
 };
@@ -221,6 +239,7 @@ static void start_values(Plugin *w) {
     start(w, SYNC_A, 1); start(w, SYNC_B, 1); start(w, PITCH_A, 0); start(w, PITCH_B, 0);
     start(w, NUDGE_A, 0); start(w, NUDGE_B, 0); start(w, QUANT, decks::Q_BAR);
     start(w, CLOCK, 0); start(w, GLIDE, 3);
+    start(w, AUTO, 0); start(w, MIX, 1);
 }
 
 /* knob -> deck (audio thread) */
@@ -280,7 +299,83 @@ static void midi(Plugin *w, const uint8_t *d) {
     case 45: select_track(w, w->lib.sel.load() + 1); break;
     case 46: select_track(w, w->lib.sel.load() - decks::ROWS); break;
     case 47: select_track(w, w->lib.sel.load() + decks::ROWS); break;
+    case 48: set_val(w, IDX[AUTO], sw(w, AUTO) ? 0 : 1); w->dirty.store(true); break;
     default: break;
+    }
+}
+
+/* the crossfader, moved by AUTO: the sound follows at once, the knob on the screen every 100 ms */
+static void auto_xfade(Plugin *w, float v, int n) {
+    w->cache[IDX[XFADE]].store(clamp01(v * 0.01f));
+    configure(w);
+    if ((w->xf_notify -= n) <= 0 || v <= 0 || v >= 100) { w->xf_notify = (int)(0.1 * w->clk.sr); w->notify[IDX[XFADE]].store(1); }
+}
+static void auto_off(Plugin *w, const char *why) {
+    set_val(w, IDX[AUTO], 0);
+    w->mixing = false;
+    w->lib.set_status_async(why);
+}
+
+/* AUTO, once per block before the decks run */
+static void auto_step(Plugin *w, const decks::Clock &c, int n) {
+    for (int d = 0; d < 2; d++) w->next_bars[d].store(-1.0f);
+    if (!sw(w, AUTO)) { w->mixing = false; w->auto_fails = 0; return; }
+    decks::Deck *k = w->deck;
+    for (int d = 0; d < 2; d++)
+        if (w->lib.auto_fail[d].exchange(0)) {
+            w->pend[d] = false;
+            if (++w->auto_fails > 4) { auto_off(w, "AUTO OFF: NO PLAYABLE TRACK FOUND"); return; }
+            w->lib.sel.store(w->lib.sel.load() + 1);   /* try the one after it */
+            w->auto_last = -1;
+        }
+    const bool on0 = k[0].playing || k[0].waiting, on1 = k[1].playing || k[1].waiting;
+    if (!on0 && !on1) {   /* nothing plays: start a fresh track, or fetch one */
+        w->mixing = false;
+        const int d = w->fresh[0] ? 0 : w->fresh[1] ? 1 : -1;
+        if (d >= 0) {
+            w->auto_play[d] = true;
+            auto_xfade(w, d ? 100.0f : 0.0f, n);
+            w->auto_last = d;
+        } else if (!w->pend[0] && !w->pend[1]) {
+            w->lib.auto_req[0].store(w->auto_last >= 0 ? 1 + w->auto_last : 3);
+            w->pend[0] = true;
+        }
+        return;
+    }
+    if (w->mixing) {
+        if (k[w->mix_to].playing) {
+            w->mix_done += n * c.tempo / 60.0 / c.sr;
+            const double x = std::min(1.0, w->mix_done / w->mix_total);
+            auto_xfade(w, (float)(w->mix_to ? 100.0 * x : 100.0 * (1.0 - x)), n);
+            if (x >= 1.0) {   /* over: the old deck stops, the new one plays on alone */
+                k[w->mix_from].playing = k[w->mix_from].waiting = false;
+                w->mixing = false;
+                w->auto_last = w->mix_to;
+                w->auto_fails = 0;
+            }
+        } else if (!k[w->mix_to].waiting) w->mixing = false;   /* it did not start */
+        return;
+    }
+    const int P = on0 && on1 ? (w->leader >= 0 ? w->leader : 0) : on0 ? 0 : 1, O = 1 - P;
+    if (on0 && on1) return;   /* both play: someone mixes by hand */
+    w->auto_last = P;
+    if (!w->fresh[O]) {
+        if (!w->pend[O]) { w->lib.auto_req[O].store(1 + P); w->pend[O] = true; }
+        return;
+    }
+    const decks::Track *t = k[P].t;
+    if (!t) return;
+    static const double BARS[4] = {4, 8, 16, 32};
+    const double trans = 4 * BARS[clampi((int)val(w, MIX), 0, 3)];
+    const double left = (double)t->frames - k[P].pos;
+    const double rem = t->bpm > 0 ? left / t->spb() : left / t->sr * 2.0;   /* beats; no tempo: as 120 BPM */
+    w->next_bars[O].store((float)std::max(0.0, (rem - trans - 4) / 4));
+    if (rem <= trans + 4) {
+        w->auto_play[O] = true;
+        w->mixing = true;
+        w->mix_from = P; w->mix_to = O;
+        w->mix_done = 0;
+        w->mix_total = std::min(trans, std::max(4.0, rem - 4));   /* a short track: a shorter mix */
     }
 }
 
@@ -342,6 +437,8 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
     }
     w->rolling.store(c.rolling);
 
+    auto_step(w, c, n);
+    bool manual_stop = false;
     for (int d = 0; d < 2; d++) {
         decks::Deck &k = w->deck[d];
         if (w->to_retire[d] && w->lib.retire(w->to_retire[d])) w->to_retire[d] = nullptr;
@@ -349,10 +446,14 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
             if (decks::Track *nt = w->lib.incoming[d].exchange(nullptr)) {
                 w->to_retire[d] = k.t;
                 k.load(nt);
+                w->fresh[d] = true;
+                w->pend[d] = false;
                 if (w->to_retire[d] && w->lib.retire(w->to_retire[d])) w->to_retire[d] = nullptr;
             }
         }
-        const int r = w->req[d].exchange(0);
+        int r = w->req[d].exchange(0);
+        if ((r & (REQ_PLAY | REQ_CUE)) && (k.playing || k.waiting)) manual_stop = true;
+        if (w->auto_play[d]) { w->auto_play[d] = false; if (!k.playing && !k.waiting) r |= REQ_PLAY; }
         if (r & REQ_SYNC) {
             set_val(w, IDX[d ? SYNC_B : SYNC_A], sw(w, d ? SYNC_B : SYNC_A) ? 0 : 1);
             configure(w);
@@ -376,7 +477,11 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
             }
         }
         k.render(L, R, n, c, w->quant, w->gain[d]);
+        if (k.playing) w->fresh[d] = false;
     }
+    /* a hand stops everything: AUTO steps aside */
+    if (manual_stop && sw(w, AUTO) && !w->deck[0].playing && !w->deck[0].waiting && !w->deck[1].playing && !w->deck[1].waiting)
+        auto_off(w, "AUTO OFF (STOPPED BY HAND)");
     if (!w->force_clock) {
         /* a deck that started while the other played is the new leader: its tempo rules, reached over GLIDE */
         for (int d = 0; d < 2; d++)
@@ -428,6 +533,11 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
         /* a new list length always: the host shows the knob's text only after a report */
         if (recount || std::fabs(w->cache[IDX[TRACK]].load() * (cnt > 1 ? cnt - 1 : 1) - sel) > 0.5f) set_norm(w, TRACK, kn);
     }
+    const int sty = w->lib.style.load(), nsty = w->lib.nstyles.load();
+    if (sty != w->last_style || nsty != w->last_nstyles) {   /* the STYLE knob follows the crate (a rescan keeps it by name) */
+        w->last_style = sty; w->last_nstyles = nsty;
+        set_norm(w, STYLE, nsty > 1 ? (float)sty / (float)(nsty - 1) : 0.0f);
+    }
     const int fsel = w->lib.fsel.load(), fcnt = w->lib.fcount.load();
     if (fsel != w->last_fsel || fcnt != w->last_fcount) {   /* the FOLDER knob follows the folder selection */
         const bool recount = fcnt != w->last_fcount;
@@ -462,8 +572,31 @@ static void processReplacing(AEffect *e, float **in, float **out, int32_t n) {
     }
     /* MPC rebuilds its parameter screen on every UpdateDisplay: at most one per 50 ms (as the
      * shared wrapper since 2026-10-21), never one per block - a knob being turned would stall */
+    /* Readouts (titles, time, position, status, rows): MPC re-reads their text only on an
+     * UpdateDisplay - it does not poll them (0.3.1 showed a playing deck frozen at 0:00). Every
+     * 100 ms: if what they would show moved (a second of the time, a beat, the state, the
+     * worker's texts, the lists), ask for one. At most 10 a second, as the shared wrapper does. */
+    if ((w->text_poll -= n) <= 0) {
+        w->text_poll += (int)(0.1 * w->clk.sr);
+        if (w->text_poll <= 0) w->text_poll = (int)(0.1 * w->clk.sr);
+        unsigned h = w->lib.text_rev.load();
+        auto mix = [&](long long v) { h = (h ^ (unsigned)v) * 16777619u; h = (h ^ (unsigned)(v >> 32)) * 16777619u; };
+        for (int d = 0; d < 2; d++) {
+            const Plugin::Ui &u = w->ui[d];
+            mix(u.state.load()); mix((long long)std::floor(u.pos.load())); mix((long long)std::floor(u.beat.load()));
+            mix(std::lround(u.eff.load() * 100)); mix(u.locked.load()); mix(w->lib.loading[d].load());
+        }
+        mix(w->ui_leader.load()); mix(w->rolling.load());
+        mix(w->lib.sel.load()); mix(w->lib.count.load()); mix(w->lib.fsel.load()); mix(w->lib.ftop.load());
+        mix(w->lib.fcount.load()); mix(w->lib.fdrive.load()); mix(w->lib.ndrives.load());
+        mix((long long)val(w, CLOCK)); mix((long long)val(w, AUTO)); mix(w->lib.style.load());
+        for (int d = 0; d < 2; d++) mix((long long)std::ceil(w->next_bars[d].load()));
+        if (h != w->last_text) { w->last_text = h; w->display_pending = true; }
+    }
+    if (any) w->display_pending = true;
     if (w->display_wait > 0) w->display_wait -= n;
-    if (any && w->display_wait <= 0) {
+    if (w->display_pending && w->display_wait <= 0) {
+        w->display_pending = false;
         w->master(&w->fx, audioMasterUpdateDisplay, 0, 0, 0, 0.0f);
         w->display_wait = (int)(0.05 * w->clk.sr);
     }
@@ -529,6 +662,12 @@ static void setParameter(AEffect *e, int32_t i, float n) {
         w->fold_rep[r].store(-1);
         return;
     }
+    if (key == STYLE) {   /* the crate: ALL, then the style folders */
+        const int ns = std::max(1, w->lib.nstyles.load());
+        w->lib.style_req.store(clampi((int)std::lround(clamp01(n) * (ns - 1)), 0, ns - 1) + 1);
+        w->cache[i].store(clamp01(n));
+        return;
+    }
     if (key == FOLDER) {   /* the knob selects a folder of the whole list, the rows page along; OPEN opens it */
         const int fc = w->lib.fcount.load();
         const int f = fc > 1 ? clampi((int)std::lround(clamp01(n) * (fc - 1)), 0, fc - 1) : 0;
@@ -572,6 +711,13 @@ static void setParameter(AEffect *e, int32_t i, float n) {
                 break;
             }
             case UP: w->lib.up_req.store(true); break;
+            case STYLE_PREV: case STYLE_NEXT: {
+                const int ns = std::max(1, w->lib.nstyles.load());
+                const int st = clampi(w->lib.style.load() + (key == STYLE_NEXT ? 1 : -1), 0, ns - 1);
+                w->lib.style_req.store(st + 1);
+                set_norm(w, STYLE, ns > 1 ? (float)st / (float)(ns - 1) : 0.0f);
+                break;
+            }
             case OPEN: if (w->lib.fcount.load() > 0) w->lib.enter_req.store(w->lib.fsel.load() + 1); break;
             case USE: w->lib.use_req.store(true); break;
             case REMOVE: w->lib.remove_req.store(true); break;
@@ -651,6 +797,7 @@ static intptr_t set_chunk(Plugin *w, const void *data, intptr_t len) {
 /* ---- the skin's text ------------------------------------------------------------ */
 static std::string deck_title(Plugin *w, int d) {
     std::string s = d ? "B   " : "A   ";
+    if (sw(w, AUTO)) s += "AUTO   ";
     if (w->lib.loading[d].load()) return s + "LOADING...";
     std::lock_guard<std::mutex> lk(w->lib.mtx);
     if (w->lib.deck_path[d].empty()) return s + "(EMPTY)";
@@ -668,6 +815,11 @@ static std::string deck_info(Plugin *w, int d) {
     double bpm, secs;
     deck_meta(w, d, &bpm, &secs);
     const bool sync = sw(w, d ? SYNC_B : SYNC_A);
+    if (st == 1 && sw(w, AUTO) && w->next_bars[d].load() >= 0) {
+        char nb[64];
+        std::snprintf(nb, sizeof nb, "AUTO NEXT  in %d BARS", (int)std::ceil(w->next_bars[d].load()));
+        return nb;
+    }
     const bool own = !sw(w, CLOCK);
     const bool lead = own && w->ui_leader.load() == d;
     std::string s = st == 2 ? (lead ? "LEAD" : own ? (sync && bpm > 0 ? "SYNC" : "PLAY") : (sync && bpm > 0 && !w->rolling.load() ? "FREE" : "PLAY"))
@@ -709,8 +861,8 @@ static std::string deck_bar(Plugin *w, int d) {
 static std::string row_text(Plugin *w, int r) {
     std::lock_guard<std::mutex> lk(w->lib.mtx);
     const int i = (w->lib.sel.load() / decks::ROWS) * decks::ROWS + r;
-    if (i < 0 || i >= (int)w->lib.entries.size()) return "";
-    const decks::Entry &e = w->lib.entries[(size_t)i];
+    if (i < 0 || i >= (int)w->lib.view.size()) return "";
+    const decks::Entry &e = w->lib.entries[(size_t)w->lib.view[(size_t)i]];
     char b[24];
     if (!e.online) std::snprintf(b, sizeof b, "OFFLINE  ");
     else if (e.bpm > 0) std::snprintf(b, sizeof b, "%6.2f   ", e.bpm);
@@ -735,8 +887,8 @@ static std::string text_of(Plugin *w, int key) {
     case HELP_1: return sw(w, CLOCK) ? "FORCE: both decks follow the Force transport" : "DECKS: the deck started last leads at its own tempo, the other follows";
     case HELP_2: return "Pads  36 PLAY A   37 CUE A   38 SYNC A   39 LOAD A";
     case HELP_3: return "Pads  40 PLAY B   41 CUE B   42 SYNC B   43 LOAD B";
-    case HELP_4: return "Pads  44 TRACK UP   45 TRACK DOWN   46 PAGE UP   47 PAGE DOWN";
-    case HELP_5: return "Decks 0.3.1";
+    case HELP_4: return "Pads  44/45 TRACK UP/DOWN   46/47 PAGE UP/DOWN   48 AUTO";
+    case HELP_5: return "Decks 0.4.0";
     case LIB_INFO: {
         const int cnt = w->lib.count.load(), sel = w->lib.sel.load();
         if (!cnt) return "NO TRACKS";
@@ -794,6 +946,14 @@ static void display(Plugin *w, int idx, char *buf, size_t n) {
     case TRACK: {
         const int cnt = w->lib.count.load();
         if (cnt) std::snprintf(buf, n, "%d / %d", w->lib.sel.load() + 1, cnt); else std::snprintf(buf, n, "NO TRACKS");
+        return;
+    }
+    case STYLE: {
+        std::lock_guard<std::mutex> lk(w->lib.mtx);
+        const int st = w->lib.style.load(), ns = (int)w->lib.styles.size();
+        if (ns <= 1) { std::snprintf(buf, n, "STYLE: ALL   (%d TRACKS)", w->lib.count.load()); return; }
+        const std::string name = st == 0 ? "ALL" : w->lib.styles[(size_t)clampi(st, 0, ns - 1)].empty() ? "(TOP FOLDER)" : decks::ascii(w->lib.styles[(size_t)st], 40);
+        std::snprintf(buf, n, "STYLE %d/%d:  %s   (%d TRACKS)", st + 1, ns, name.c_str(), w->lib.count.load());
         return;
     }
     case FOLDER: {

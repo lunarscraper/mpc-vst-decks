@@ -103,6 +103,13 @@ inline std::string ascii(const std::string &s, size_t max = 200) {
     }
     return o;
 }
+/* the style of a track: its first folder below the source folder ("" for a file right in it) */
+inline std::string style_of(const std::string &path, const std::string &src) {
+    if (path.size() <= src.size() + 1 || path.compare(0, src.size(), src) != 0) return "";
+    const std::string rel = path.substr(src.size() + 1);
+    const size_t s = rel.find('/');
+    return s == std::string::npos ? "" : rel.substr(0, s);
+}
 inline std::string fmt_time(double s) {
     if (s < 0) s = 0;
     char b[24];
@@ -114,6 +121,7 @@ inline std::string fmt_time(double s) {
 struct Drive { std::string mount, label, dev; };
 struct Entry {
     std::string path, name, src;   /* src: the source folder it was found in */
+    std::string style;             /* its first folder below the source: the style crate */
     long long size = 0, mtime = 0;
     double bpm = -1, beat0 = 0;    /* bpm -1 = not analysed yet, 0 = no tempo */
     double secs = 0;
@@ -236,7 +244,12 @@ struct Library {
     std::atomic<Track *> retired[NRETIRED];                     /* audio -> worker: tracks to free */
     std::atomic<bool> busy[2] = {{false}, {false}};               /* deck playing (set by the audio thread) */
     std::atomic<int> load_req[2] = {{0}, {0}};                    /* list index + 1 */
-    std::atomic<int> sel{0};                                      /* selected track (list index) */
+    std::atomic<int> sel{0};                                      /* selected track (index in the view) */
+    std::atomic<int> style{0};                                    /* crate shown: 0 = ALL, else styles[style] */
+    std::atomic<int> nstyles{1};
+    std::atomic<int> style_req{0};                                /* crate index + 1 */
+    std::atomic<int> auto_req[2] = {{0}, {0}};                    /* AUTO: load the next track onto a deck:
+                                                                   * 1 + deck = the one after that deck's track, 3 = the selection */
     std::atomic<int> count{0};                                    /* tracks in the list */
     std::atomic<int> fdrive{0};                                   /* drive on the SOURCE page */
     std::atomic<int> ftop{0};                                     /* first folder row shown */
@@ -247,12 +260,17 @@ struct Library {
     std::atomic<bool> up_req{false}, use_req{false}, remove_req{false}, rescan_req{true};
     std::atomic<bool> quit{false};
     std::atomic<int> loading[2] = {{0}, {0}};                     /* 1 while a deck's track is being read */
+    std::atomic<int> auto_fail[2] = {{0}, {0}};                   /* an AUTO load came to nothing */
     std::atomic<int> sel_changed{0};                              /* the worker moved the selection (rescan) */
+    std::atomic<unsigned> text_rev{0};                            /* hash of the texts under mtx: the audio thread
+                                                                   * asks the host to re-read readouts when it moves */
 
     /* ---- for the skin's text (UI thread) and the worker, under mtx ---- */
     std::mutex mtx;
     std::vector<Drive> drives;
     std::vector<Entry> entries;
+    std::vector<int> view;                  /* the tracks of the chosen style, as indices into entries */
+    std::vector<std::string> styles;        /* [0] = "ALL", then the style folders, sorted */
     std::vector<std::string> folders;       /* subfolders of fpath */
     std::string fpath;                      /* folder shown on the SOURCE page */
     int fpath_drive = -1;
@@ -277,6 +295,9 @@ struct Library {
         for (auto &i : incoming) delete i.exchange(nullptr);
     }
     void set_status(const std::string &s) { std::lock_guard<std::mutex> lk(mtx); status = s; }
+    /* from the audio thread: no lock there, the worker copies it into status */
+    std::atomic<const char *> status_msg{nullptr};
+    void set_status_async(const char *s) { status_msg.store(s); }
 
     /* audio thread: hand back a track that left a deck; false = all slots full, try next block */
     bool retire(Track *t) {
@@ -329,11 +350,45 @@ struct Library {
                 e.path = col[0]; e.size = std::atoll(col[1]); e.mtime = std::atoll(col[2]);
                 e.bpm = std::atof(col[3]); e.beat0 = std::atof(col[4]); e.secs = std::atof(col[5]); e.src = col[6];
                 e.name = strip_ext(base_name(e.path));
+                e.style = style_of(e.path, e.src);
                 entries.push_back(e);
             }
             std::fclose(f);
         }
-        count.store((int)entries.size());
+        build_styles_locked();
+        rebuild_view_locked("");
+    }
+    /* the style crates: every first-level folder name of every source (same names merge) */
+    void build_styles_locked() {
+        const std::string cur = style.load() > 0 && style.load() < (int)styles.size() ? styles[(size_t)style.load()] : "";
+        std::vector<std::string> st;
+        bool top = false;
+        for (const Entry &e : entries) { if (e.style.empty()) top = true; else st.push_back(e.style); }
+        std::sort(st.begin(), st.end(), [](const std::string &a, const std::string &b) { const std::string x = lower(a), y = lower(b); return x != y ? x < y : a < b; });
+        st.erase(std::unique(st.begin(), st.end()), st.end());
+        styles.assign(1, "ALL");
+        styles.insert(styles.end(), st.begin(), st.end());
+        if (top) styles.push_back("");   /* tracks lying right in a source folder */
+        int ns = 0;
+        for (size_t i = 1; i < styles.size(); i++) if (!cur.empty() && styles[i] == cur) ns = (int)i;
+        style.store(ns);
+        nstyles.store((int)styles.size());
+    }
+    /* the list the browser shows: the chosen crate (all tracks for ALL); keeps the selected track if it is still in it */
+    void rebuild_view_locked(const std::string &keep) {
+        const int st = style.load();
+        view.clear();
+        for (size_t i = 0; i < entries.size(); i++)
+            if (st <= 0 || st >= (int)styles.size() || entries[i].style == styles[(size_t)st]) view.push_back((int)i);
+        int ns = 0;
+        for (size_t i = 0; i < view.size(); i++) if (!keep.empty() && entries[(size_t)view[i]].path == keep) ns = (int)i;
+        count.store((int)view.size());
+        sel.store(ns);
+        sel_changed.store(1);
+    }
+    std::string sel_path_locked() const {
+        const int s = sel.load();
+        return s >= 0 && s < (int)view.size() ? entries[(size_t)view[(size_t)s]].path : "";
     }
     void save_sources_locked() {
         std::string t;
@@ -380,8 +435,7 @@ struct Library {
         {
             std::lock_guard<std::mutex> lk(mtx);
             srcs = sources; dv = drives; old = entries;
-            const int s = sel.load();
-            if (s >= 0 && s < (int)entries.size()) selpath = entries[(size_t)s].path;
+            selpath = sel_path_locked();
             status = "SCANNING...";
         }
         std::vector<Entry> fresh;
@@ -411,13 +465,11 @@ struct Library {
             const std::string x = lower(a.path), y = lower(b.path);
             return x != y ? x < y : a.path < b.path;
         });
+        for (Entry &e : fresh) e.style = style_of(e.path, e.src);
         std::lock_guard<std::mutex> lk(mtx);
         entries.swap(fresh);
-        int ns = 0;
-        for (size_t i = 0; i < entries.size(); i++) if (entries[i].path == selpath) ns = (int)i;
-        count.store((int)entries.size());
-        sel.store(ns);
-        sel_changed.store(1);
+        build_styles_locked();
+        rebuild_view_locked(selpath);
         save_index_locked();
         int off = 0;
         for (const Entry &e : entries) off += !e.online;
@@ -495,33 +547,33 @@ struct Library {
     }
 
     /* ---- loading ---- */
-    void load(int d, const std::string &path_in, int index) {
+    bool load(int d, const std::string &path_in, int index) {   /* true: the track is on its way to the deck */
         std::string path = path_in;
         double bpm = -1, beat0 = 0;
         long long size = 0, mtime = 0;
         {
             std::lock_guard<std::mutex> lk(mtx);
             if (path.empty()) {
-                if (index < 0 || index >= (int)entries.size()) return;
-                const Entry &e = entries[(size_t)index];
-                if (!e.online) { status = "OFFLINE: " + ascii(e.name, 60); return; }
+                if (index < 0 || index >= (int)view.size()) return false;
+                const Entry &e = entries[(size_t)view[(size_t)index]];
+                if (!e.online) { status = "OFFLINE: " + ascii(e.name, 60); return false; }
                 path = e.path;
             }
             for (const Entry &e : entries) if (e.path == path) { bpm = e.bpm; beat0 = e.beat0; size = e.size; mtime = e.mtime; }
         }
-        if (busy[d].load()) { set_status(std::string("DECK ") + (char)('A' + d) + " IS PLAYING - STOP IT FIRST"); return; }
+        if (busy[d].load()) { set_status(std::string("DECK ") + (char)('A' + d) + " IS PLAYING - STOP IT FIRST"); return false; }
         struct stat st;
-        if (stat(path.c_str(), &st) != 0) { set_status("NOT FOUND: " + ascii(base_name(path), 60)); return; }
+        if (stat(path.c_str(), &st) != 0) { set_status("NOT FOUND: " + ascii(base_name(path), 60)); return false; }
         if ((long long)st.st_size != size || (long long)st.st_mtime != mtime) bpm = -1;   /* changed since the analysis */
         loading[d].store(1);
         set_status(std::string("LOADING ") + (char)('A' + d) + ": " + ascii(strip_ext(base_name(path)), 60));
         std::string why;
         Track *t = decode(path, &why);
-        if (!t) { loading[d].store(0); set_status(why + ": " + ascii(base_name(path), 60)); return; }
+        if (!t) { loading[d].store(0); set_status(why + ": " + ascii(base_name(path), 60)); return false; }
         if (bpm < 0) {
             set_status(std::string("ANALYSING ") + (char)('A' + d) + ": " + ascii(t->title, 60));
             const Grid g = analyse(t->pcm, t->frames, t->sr, &quit);
-            if (quit.load()) { delete t; loading[d].store(0); return; }
+            if (quit.load()) { delete t; loading[d].store(0); return false; }
             bpm = g.bpm; beat0 = g.beat0;
             std::lock_guard<std::mutex> lk(mtx);
             for (Entry &e : entries) if (e.path == path) {
@@ -544,6 +596,7 @@ struct Library {
             status = std::string("DECK ") + (char)('A' + d) + ": " + ascii(t->title, 50) + b;
         }
         loading[d].store(0);
+        return true;
     }
 
     void run() {
@@ -571,14 +624,50 @@ struct Library {
                     rescan_req.store(true);
                 }
             }
+            if (const char *m = status_msg.exchange(nullptr)) set_status(m);
             folder_requests();
             if (rescan_req.exchange(false)) scan();
+            if (const int st = style_req.exchange(0)) {   /* another crate */
+                std::lock_guard<std::mutex> lk(mtx);
+                const std::string keep = sel_path_locked();
+                style.store(std::max(0, std::min(st - 1, (int)styles.size() - 1)));
+                rebuild_view_locked(keep);
+            }
+            for (int d = 0; d < 2; d++) {   /* AUTO: the next track of the crate, in its order (after the last one, the first) */
+                const int a = auto_req[d].exchange(0);
+                if (!a) continue;
+                std::string p;
+                {
+                    std::lock_guard<std::mutex> lk(mtx);
+                    int at = -1;
+                    if (a <= 2 && !deck_path[a - 1].empty())
+                        for (size_t i = 0; i < view.size(); i++) if (entries[(size_t)view[i]].path == deck_path[a - 1]) at = (int)i;
+                    int next = at >= 0 ? at + 1 : sel.load();
+                    for (int tries = 0; tries < (int)view.size(); tries++, next++) {   /* skip offline tracks */
+                        if (next >= (int)view.size()) next = 0;
+                        if (entries[(size_t)view[(size_t)next]].online) { p = entries[(size_t)view[(size_t)next]].path; break; }
+                    }
+                    if (!p.empty()) { sel.store(next); sel_changed.store(1); }
+                }
+                if (p.empty()) { set_status("AUTO: NO TRACK TO PLAY"); auto_fail[d].store(1); }
+                else if (!load(d, p, -1)) auto_fail[d].store(1);   /* could not be read, or the deck plays */
+            }
             for (int d = 0; d < 2; d++) {
                 std::string p;
                 { std::lock_guard<std::mutex> lk(mtx); p.swap(path_req[d]); }
                 if (!p.empty()) load(d, p, -1);
                 const int r = load_req[d].exchange(0);
                 if (r > 0) load(d, "", r - 1);
+            }
+            {   /* status, folder view, sources, decks: one hash, so the audio thread sees a change without the mutex */
+                std::lock_guard<std::mutex> lk(mtx);
+                unsigned h = 2166136261u;
+                auto mix = [&](const std::string &x) { for (unsigned char c : x) h = (h ^ c) * 16777619u; h = (h ^ 0xff) * 16777619u; };
+                mix(status); mix(fpath); mix(deck_path[0]); mix(deck_path[1]); h = (h ^ (unsigned)style.load()) * 16777619u;
+                for (auto &src : sources) { mix(src.first); mix(src.second); }
+                for (const Drive &d : drives) mix(d.mount);
+                h = (h ^ (unsigned)folders.size()) * 16777619u;
+                text_rev.store(h);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }

@@ -49,9 +49,10 @@ typedef struct {
 static VstTimeInfo g_ti;
 static bool g_play = false, g_frozen = false;   /* frozen: transport "playing" but the position stands still */
 static double g_ppq = 0, g_tempo = 140;
-static int g_automates = 0;
+static int g_automates = 0, g_updates = 0;
 static intptr_t master(AEffect *, int32_t op, int32_t, intptr_t, void *, float) {
     if (op == 0) g_automates++;
+    if (op == 42) g_updates++;
     if (op != 7) return 0;
     std::memset(&g_ti, 0, sizeof g_ti);
     g_ti.ppqPos = g_ppq; g_ti.tempo = g_tempo;
@@ -362,6 +363,11 @@ int main(int argc, char **argv) {
         CHECK(worst < 3.0, "every kick on a Force beat: worst %.2f ms", worst);
         std::printf("  sync: %d kicks, worst %.2f ms from the Force beat\n", nk, worst);
     }
+    {   /* readouts are re-read by MPC only on UpdateDisplay: a playing deck must ask for them, at most 10 a second */
+        g_updates = 0;
+        run(e, 4.0);
+        CHECK(g_updates >= 8 && g_updates <= 41, "UpdateDisplay while playing: %d in 4 s", g_updates);
+    }
     CHECK(display(e, "Position A").find("BAR ") != std::string::npos && display(e, "Position A").find("LOCK") != std::string::npos,
           "position readout: %s", display(e, "Position A").c_str());
 
@@ -567,6 +573,54 @@ int main(int argc, char **argv) {
     run(e, 4.0);
     CHECK(display(e, "Info A").find("LEAD  128.00 > 128.00") == 0, "A back at 128 after the glide: %s", display(e, "Info A").c_str());
     pad_note(e, 36);
+
+    /* -- style crates: the first folder below the source -- */
+    CHECK(display(e, "Style").find("STYLE 1/3:  ALL") == 0, "crates ALL, Goa, top: %s", display(e, "Style").c_str());
+    press(e, "Style Next");
+    CHECK(wait_for(e, "Style", "Goa   (1 TRACKS)"), "crate Goa: %s", display(e, "Style").c_str());
+    CHECK(display(e, "Row 1").find("mono 140") != std::string::npos && display(e, "Row 2").empty(), "only Goa listed: %s", display(e, "Row 1").c_str());
+    setn(e, "Style", 1.0f);   /* the knob: the last crate, the tracks right in the source folder */
+    /* top crate: the files right in a source folder - drive1/Music's three and drive2/Set's one */
+    CHECK(wait_for(e, "Style", "(TOP FOLDER)   (4 TRACKS)"), "crate top: %s", display(e, "Style").c_str());
+    CHECK(display(e, "Row 1").find("ambient") != std::string::npos && display(e, "Row 2").find("Gruesse") != std::string::npos &&
+          display(e, "Row 3").find("techno 128") != std::string::npos, "top crate rows");
+
+    /* -- AUTO: the crate in its order, MIX bars of crossfade before a track ends -- */
+    setn(e, "Auto Mix", 0.0f);   /* 4 BARS */
+    tap(e, "Row 2");             /* start at Gruesse (132 BPM, 30 s) */
+    run(e, 0.05);
+    pad_note(e, 48);             /* pad: AUTO on */
+    CHECK(wait_for(e, "Title A", "Gruesse") && wait_for(e, "Info A", "LEAD"), "AUTO loads the selection onto A and plays it: %s", display(e, "Info A").c_str());
+    CHECK(display(e, "Crossfader") == "A 50", "AUTO puts the crossfader on A: %s", display(e, "Crossfader").c_str());
+    CHECK(wait_for(e, "Title B", "techno 128"), "AUTO loads the next track onto B");
+    CHECK(wait_for(e, "Info B", "AUTO NEXT  in"), "B waits for its turn: %s", display(e, "Info B").c_str());
+    {
+        bool mixed = false, a_stopped = false;
+        for (int i = 0; i < 400 && !a_stopped; i++) {   /* run on through the end of Gruesse */
+            run(e, 0.1);
+            if (display(e, "Info B").find("PLAY") == 0 || display(e, "Info B").find("LEAD") == 0) {
+                const std::string x = display(e, "Crossfader");
+                if (x != "A 50" && x != "B 50") mixed = true;
+            }
+            a_stopped = display(e, "Info B").find("LEAD") == 0 && display(e, "Crossfader") == "B 50" &&
+                        (display(e, "Title A").find("Gruesse") == std::string::npos || display(e, "Info A").find("PLAY") != 0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(mixed, "the crossfader moved during the mix");
+        CHECK(a_stopped, "B took over: %s | %s | %s", display(e, "Info A").c_str(), display(e, "Info B").c_str(), display(e, "Crossfader").c_str());
+        std::printf("  auto: %s | %s\n", display(e, "Title B").c_str(), display(e, "Info B").c_str());
+    }
+    CHECK(wait_for(e, "Title A", "set 135"), "then the next one of the crate onto A: %s", display(e, "Title A").c_str());
+    CHECK(rms(run(e, 1.0)) > 0.01, "music goes on");
+    pad_note(e, 40);   /* a hand stops the only playing deck: AUTO steps aside */
+    run(e, 0.1);
+    CHECK(display(e, "Auto") == "OFF", "AUTO off after a manual stop: %s", display(e, "Auto").c_str());
+    CHECK(wait_for(e, "Status", "AUTO OFF (STOPPED BY HAND)"), "status says so: %s", display(e, "Status").c_str());
+    run(e, 1.0);
+    CHECK(display(e, "Info A").find("STOP") == 0 && display(e, "Info B").find("STOP") == 0, "and nothing restarts");
+    press(e, "Style Prev"); press(e, "Style Prev");
+    wait_for(e, "Style", "ALL");
+    setn(e, "Crossfader", 0.5f);
 
     /* -- Force clock, transport reported as playing but standing still: counts as stopped -- */
     setn(e, "Clock", 1);

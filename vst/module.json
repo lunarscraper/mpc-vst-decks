@@ -379,6 +379,40 @@
    "min": 0,
    "max": 1,
    "display": "string"
+  },
+  {
+   "key": "style",
+   "name": "Style",
+   "min": 0,
+   "max": 100
+  },
+  {
+   "key": "style_prev",
+   "name": "Style Prev",
+   "access": "write"
+  },
+  {
+   "key": "style_next",
+   "name": "Style Next",
+   "access": "write"
+  },
+  {
+   "key": "auto",
+   "name": "Auto",
+   "options": [
+    "OFF",
+    "ON"
+   ]
+  },
+  {
+   "key": "mix",
+   "name": "Auto Mix",
+   "options": [
+    "4 BARS",
+    "8 BARS",
+    "16 BARS",
+    "32 BARS"
+   ]
   }
  ]
 }
